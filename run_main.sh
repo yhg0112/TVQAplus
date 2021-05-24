@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-release_path=tvqa_plus_stage_features
+	export CUDA_VISIBLE_DEVICES=0
+release_path=/media/disk1/youaredead/data/TVQA/tvqa_plus_stage_features
 #release_path=$1
 
 debug_vcpt_path=${release_path}/bottom_up_visual_sen_hq_bbt_100_debug.pickle
@@ -13,6 +14,8 @@ test_path=${release_path}/tvqa_plus_test_preprocessed_no_anno.json
 qa_bert_path=${release_path}/bbt_qa_s_tokenized_bert_sub_qa_tuned_new_qid.h5
 sub_bert_path=${release_path}/bbt_sub_s_tokenized_bert_sub_qa_tuned.h5
 sub_path=${release_path}/tvqa_plus_subtitles.json
+desc_bert_path=${release_path}/desc_tokenized_bert.h5
+desc_path=${release_path}/tvqa_plus_descriptions.json
 
 word2idx_path=${release_path}/word2idx.json
 eval_object_vocab_path=${release_path}/eval_object_vocab.json
@@ -43,4 +46,9 @@ python main.py \
 --eval_object_vocab_path ${eval_object_vocab_path} \
 --frm_cnt_path ${frm_cnt_path} \
 --use_sup_att \
+--test_path ${test_path} \
+--desc_path ${desc_path} \
+--desc_bert_path ${desc_bert_path} \
+--use_desc 1 \
+--hsic 0.001 \
 ${extra_args[@]}
