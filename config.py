@@ -140,6 +140,8 @@ class BaseOptions(object):
         self.parser.add_argument("--desc_path", type=str, default="")
         self.parser.add_argument("--frm_cnt_path", type=str, default="")
 
+        self.parser.add_argument("-f", type=str, help="dummy args for notebook envirionments")
+
     def display_save(self):
         args = vars(self.opt)
         # Display settings

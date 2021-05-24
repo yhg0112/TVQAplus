@@ -42,6 +42,7 @@ def inference(opt, dset, model):
     predictions = dict(ts_answer={}, raw_bbox=[])
     max_len_dict = dict(
         max_sub_l=opt.max_sub_l,
+        max_desc_l=opt.max_desc_l,
         max_vid_l=opt.max_vid_l,
         max_vcpt_l=opt.max_vcpt_l,
         max_qa_l=opt.max_qa_l,
