@@ -63,7 +63,7 @@ class STAGE(nn.Module):
         self.vfeat_flag = opt.vfeat_flag
         self.vfeat_size = opt.vfeat_size
         self.power_transform = opt.power_transform
-        self.hsic_scale = opt.hsic_scale
+        self.hsic_scale = opt.hsic
         self.t_iter = opt.t_iter
         self.extra_span_length = opt.extra_span_length
         self.add_local = opt.add_local
@@ -118,7 +118,7 @@ class STAGE(nn.Module):
                 nn.ReLU(True),
                 nn.LayerNorm(self.hsz),
             )
-        elif self.fag_cnt == 3:
+        elif self.flag_cnt == 3:
             self.concat_fc = nn.Sequential(
                 nn.LayerNorm(5 * self.hsz),
                 nn.Dropout(self.dropout),
@@ -208,7 +208,7 @@ class STAGE(nn.Module):
         if self.inference_mode:
             return self.forward_main(batch)
         else:
-            out, att_loss, att_predictions, temporal_loss, temporal_predictions, other_outputs, hisc_loss = self.forward_main(batch)
+            out, att_loss, att_predictions, temporal_loss, temporal_predictions, other_outputs, hsic_loss = self.forward_main(batch)
             return out, att_loss, att_predictions, temporal_loss, temporal_predictions, hsic_loss
 
     def forward_main(self, batch):
