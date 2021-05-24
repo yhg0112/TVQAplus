@@ -23,12 +23,12 @@ class BaseOptions(object):
         self.parser.add_argument("--lr", type=float, default=1e-3, help="learning rate")
         self.parser.add_argument("--wd", type=float, default=3e-7, help="weight decay")
         self.parser.add_argument("--n_epoch", type=int, default=100, help="number of epochs to run")
-        self.parser.add_argument("--max_es_cnt", type=int, default=5, help="number of epochs to early stop")
-        self.parser.add_argument("--bsz", type=int, default=16, help="mini-batch size")
-        self.parser.add_argument("--test_bsz", type=int, default=16, help="mini-batch size for testing")
+        self.parser.add_argument("--max_es_cnt", type=int, default=20, help="number of epochs to early stop")
+        self.parser.add_argument("--bsz", type=int, default=4, help="mini-batch size")
+        self.parser.add_argument("--test_bsz", type=int, default=8, help="mini-batch size for testing")
         self.parser.add_argument("--device", type=int, default=0, help="0 cuda, -1 cpu")
         self.parser.add_argument("--device_ids", type=int, nargs="+", default=[0], help="GPU ids to run the job")
-        self.parser.add_argument("--num_workers", type=int, default=2,
+        self.parser.add_argument("--num_workers", type=int, default=0,
                                  help="num subprocesses used to load the data, 0: use main process")
         self.parser.add_argument("--t_iter", type=int, default=0,
                                  help="positive integer, indicating #iterations for refine temporal prediction")
@@ -40,9 +40,9 @@ class BaseOptions(object):
         self.parser.add_argument("--ts_weight", type=float, default=0.5, help="temporal loss weight")
         self.parser.add_argument("--add_local", action="store_true",
                                  help="concat local feature with global feature for QA")
-        self.parser.add_argument("--input_streams", type=str, nargs="+", default=["sub", "vfeat"],
-                                 choices=["vcpt", "sub", "vfeat", "joint_v"],
-                                 help="input streams for the model, will use both `vcpt` and `sub` streams")
+        self.parser.add_argument("--input_streams", type=str, nargs="+", default=["sub", "vfeat", "desc"],
+                                 choices=["vcpt", "sub", "vfeat", "joint_v", "desc"],
+                                 help="input streams for the model, will use both `vcpt`, `sub`, and `desc` streams")
         self.parser.add_argument("--vfeat_type", type=str, help="video feature type",
                                  choices=["imagenet_hq", "imagenet_hq_pca", "tsn_rgb_hq", "tsn_rgb_hq_pca", "tsn_flow",
                                           "tsn_flow_pca", "det_hq", "det_hq_pca", "det_hq_rm_dup",
@@ -87,6 +87,8 @@ class BaseOptions(object):
         # length limit
         self.parser.add_argument("--max_sub_l", type=int, default=50,
                                  help="maxmimum length of all sub sentence 97.71 under 50 for 3 sentences")
+        self.parser.add_argument("--max_desc_l", type=int, default=50,
+                                 help="maxmimum length of all desc sentence 97.71 under 50 for 3 sentences")       
         self.parser.add_argument("--max_vid_l", type=int, default=300,
                                  help="maxmimum length of all video sequence")
         self.parser.add_argument("--max_vcpt_l", type=int, default=300,
@@ -99,6 +101,9 @@ class BaseOptions(object):
                                  help="maxmimum length of answer, 99.7% <= 40")
 
         # model config
+        self.parser.add_argument("--power_transform", action="store_true", help="add power transform for each feature embedding")
+        self.parser.add_argument("--hsic", type=float, default=1e-2, help="hsic loss scaling parameter")
+
         self.parser.add_argument("--embedding_size", type=int, default=768, help="word embedding dim")
         self.parser.add_argument("--hsz", type=int, default=128, help="hidden size.")
         self.parser.add_argument("--vocab_size", type=int, default=0, help="vocabulary size")
@@ -124,6 +129,7 @@ class BaseOptions(object):
         self.parser.add_argument("--eval_object_vocab_path", type=str)
         self.parser.add_argument("--qa_bert_path", type=str, default="")
         self.parser.add_argument("--sub_bert_path", type=str, default="")
+        self.parser.add_argument("--desc_bert_path", type=str, default="")
         self.parser.add_argument("--train_path", type=str)
         self.parser.add_argument("--valid_path", type=str)
         self.parser.add_argument("--test_path", type=str)
@@ -131,6 +137,7 @@ class BaseOptions(object):
         self.parser.add_argument("--vfeat_path", type=str, default="")
         self.parser.add_argument("--vfeat_size", type=int, default=300, help="dimension of the video feature")
         self.parser.add_argument("--sub_path", type=str, default="")
+        self.parser.add_argument("--desc_path", type=str, default="")
         self.parser.add_argument("--frm_cnt_path", type=str, default="")
 
     def display_save(self):
@@ -190,6 +197,7 @@ class BaseOptions(object):
         opt.vfeat_flag = "vfeat" in opt.input_streams
         opt.vcpt_flag = "vcpt" in opt.input_streams
         opt.sub_flag = "sub" in opt.input_streams
+        opt.desc_flag = "desc" in opt.input_streams
         self.opt = opt
         return opt
 
@@ -201,3 +209,4 @@ class TestOptions(BaseOptions):
         self.parser.add_argument("--model_dir", type=str, help="dir contains the model file")
         self.parser.add_argument("--mode", type=str, default="valid", help="valid/test")
         self.parser.add_argument("--no_strict", action="store_true", help="turn off strict mode in load_state_dict")
+        self.parser.add_argument("-f", type=str, help="dummy args for notebook envirionments")
