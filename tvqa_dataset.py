@@ -38,12 +38,17 @@ class TVQADataset(Dataset):
             self.raw_test = load_json(opt.test_path)
         self.raw_valid = load_json(opt.valid_path)
         self.sub_data = load_json(opt.sub_path)
+        self.desc_flag = "desc" in opt.input_streams
+        if self.desc_flag:
+            self.desc_data = load_json(opt.desc_path)
         self.sub_flag = "sub" in opt.input_streams
         self.vfeat_flag = "vfeat" in opt.input_streams
         self.vfeat_type = opt.vfeat_type
         self.qa_bert_h5 = h5py.File(opt.qa_bert_path, "r", driver=opt.h5driver)  # qid + key
         if self.sub_flag:
             self.sub_bert_h5 = h5py.File(opt.sub_bert_path, "r", driver=opt.h5driver)  # vid_name
+        if self.desc_flag:
+            self.desc_bert_h5 = h5py.File(opt.desc_bert_path, "r", driver=opt.h5driver)
         if self.vfeat_flag:
             self.vid_h5 = h5py.File(opt.vfeat_path, "r", driver=opt.h5driver)  # add core
         self.vcpt_flag = "vcpt" in opt.input_streams or self.vfeat_flag  # if vfeat, must vcpt
@@ -184,10 +189,34 @@ class TVQADataset(Dataset):
             items["sub_bert"] = [torch.zeros(2, 2)] * 2
             items["sub"] = [torch.zeros(2, 2)] * 2
 
+        # add desc
+        if self.desc_flag:
+            img_aligned_desc_indices, raw_desc_n_tokens = self.get_aligned_sub_indices(
+                indices + 1,
+                self.desc_data[vid_name]["desc_text"],
+                self.desc_data[vid_name]["desc_time"],
+                mode="nearest")
+            try:
+                desc_bert_embed = dissect_by_lengths(self.desc_bert_h5[vid_name][:], raw_desc_n_tokens, dim=0)
+            except AssertionError as e:  # 35 QAs from 7 videos:
+                desc_bert_embed = dissect_by_lengths(self.desc_bert_h5[vid_name][:], raw_desc_n_tokens,
+                                                    dim=0, assert_equal=False)
+                desc_bert_embed = rm_empty_by_copy(desc_bert_embed)                
+            assert len(desc_bert_embed) == len(raw_desc_n_tokens)  # we did not truncate when extract embeddings
+
+            items["desc_bert"] = [torch.from_numpy(np.concatenate([desc_bert_embed[in_idx] for in_idx in e], axis=0))
+                                for e in img_aligned_desc_indices]
+            aligned_desc_text = self.get_aligned_sub(self.desc_data[vid_name]["desc_text"],
+                                                    img_aligned_desc_indices)
+            items["desc"] = [self.numericalize(e, eos=False) for e in aligned_desc_text]
+        else:
+            items["desc_bert"] = [torch.zeros(2, 2)] * 2
+            items["desc"] = [torch.zeros(2, 2)] * 2
+
         if self.vfeat_flag or self.vcpt_flag:
             region_counts = self.vcpt_dict[vid_name]["counts"]  # full resolution
             localized_lowered_region_counts = \
-                [min(region_counts[idx], self.num_region) for idx in indices][start_idx:end_idx+1]
+                [min(region_counts[idx], self.num_region) for idx in indices][start_idx:end_idx+1]     
 
         # add vcpt
         if self.vcpt_flag:
@@ -295,6 +324,9 @@ class TVQADataset(Dataset):
         """
         subtext = subtext.split(" <eos> ")  # note the spaces
         raw_sub_n_tokens = [len(s.split()) for s in subtext]
+        if not len(subtime) == len(subtext):
+            print(subtime)
+            print(subtext)
         assert len(subtime) == len(subtext)
         img_timestamps = np.array(img_ids) / fps  # roughly get the timestamp for the
         img_aligned_sentence_indices = []  # list(list)
@@ -598,6 +630,8 @@ def pad_collate(data):
     batch["qas_bert"], _ = pad_sequences_2d([d["qas_bert"] for d in data], dtype=torch.float)
     batch["sub"], batch["sub_mask"] = pad_sequences_2d([d["sub"] for d in data], dtype=torch.long)
     batch["sub_bert"], _ = pad_sequences_2d([d["sub_bert"] for d in data], dtype=torch.float)
+    batch["desc"], batch["desc_mask"] = pad_sequences_2d([d["desc"] for d in data], dtype=torch.long)
+    batch["desc_bert"], _ = pad_sequences_2d([d["desc_bert"] for d in data], dtype=torch.float)
     batch["vid_name"] = [d["vid_name"] for d in data]
     batch["qid"] = [d["qid"] for d in data]
     batch["target"] = torch.tensor([d["target"] for d in data], dtype=torch.long)
@@ -642,6 +676,10 @@ def prepare_inputs(batch, max_len_dict=None, device="cuda"):
     model_in_dict["sub"] = batch["sub"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_sub_l"]].to(device)
     model_in_dict["sub_bert"] = batch["sub_bert"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_sub_l"]].to(device)
     model_in_dict["sub_mask"] = batch["sub_mask"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_sub_l"]].to(device)
+
+    model_in_dict["desc"] = batch["desc"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_desc_l"]].to(device)
+    model_in_dict["desc_bert"] = batch["desc_bert"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_desc_l"]].to(device)
+    model_in_dict["desc_mask"] = batch["desc_mask"][:, :max_len_dict["max_vid_l"], :max_len_dict["max_desc_l"]].to(device)
 
     # context, vid (B, #imgs, #regions, D), vcpt (B, #imgs, #regions)
     ctx_keys = ["vid", "vcpt"]
