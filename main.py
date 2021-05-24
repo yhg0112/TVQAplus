@@ -24,12 +24,14 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
     train_loss = []
     train_loss_att = []
     train_loss_ts = []
+    train_loss_hsic = []
     train_loss_cls = []
     valid_acc_log = ["batch_idx\tacc"]
     train_corrects = []
     torch.set_grad_enabled(True)
     max_len_dict = dict(
         max_sub_l=opt.max_sub_l,
+        max_desc_l=opt.max_desc_l,
         max_vid_l=opt.max_vid_l,
         max_vcpt_l=opt.max_vcpt_l,
         max_qa_l=opt.max_qa_l,
@@ -50,14 +52,14 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
         model_inputs.use_hard_negatives = use_hard_negatives
         try:
             timer_start = time.time()
-            outputs, att_loss, _, temporal_loss, _ = model(model_inputs)
+            outputs, att_loss, _, temporal_loss, _, hsic_loss = model(model_inputs)
             outputs, targets = outputs
             att_loss = opt.att_weight * att_loss
             temporal_loss = opt.ts_weight * temporal_loss
             cls_loss = criterion(outputs, targets)
             # keep the cls_loss at the same magnitude as only classifying batch_size objects
             cls_loss = cls_loss * (1.0 * len(qids) / len(targets))
-            loss = cls_loss + att_loss + temporal_loss
+            loss = cls_loss + att_loss + temporal_loss + hsic_loss
             model_forward_time.update(time.time() - timer_start)
             timer_start = time.time()
             optimizer.zero_grad()
@@ -69,7 +71,8 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
             train_loss.append(loss.data.item())
             train_loss_att.append(float(att_loss))
             train_loss_ts.append(float(temporal_loss))
-            train_loss_cls.append(cls_loss.item())
+            train_loss_hsic.append(float(hsic_loss))
+            train_loss_cls.append(cls_loss.item())            
             pred_ids = outputs.data.max(1)[1]
             train_corrects += pred_ids.eq(targets.data).tolist()
         except RuntimeError as e:
@@ -85,6 +88,7 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
                 train_loss = 0
                 train_loss_att = 0
                 train_loss_ts = 0
+                train_loss_hsic = 0
                 train_loss_cls = 0
             else:
                 train_acc = sum(train_corrects) / float(len(train_corrects))
@@ -92,11 +96,13 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
                 train_loss_att = sum(train_loss_att) / float(len(train_corrects))
                 train_loss_cls = sum(train_loss_cls) / float(len(train_corrects))
                 train_loss_ts = sum(train_loss_ts) / float(len(train_corrects))
+                train_loss_hsic = sum(train_loss_hsic) / float(len(train_corrects))
                 opt.writer.add_scalar("Train/Acc", train_acc, niter)
                 opt.writer.add_scalar("Train/Loss", train_loss, niter)
                 opt.writer.add_scalar("Train/Loss_att", train_loss_att, niter)
                 opt.writer.add_scalar("Train/Loss_cls", train_loss_cls, niter)
                 opt.writer.add_scalar("Train/Loss_ts", train_loss_ts, niter)
+                opt.writer.add_scalar("Train/Loss_hsic", train_loss_hsic, niter)
             # Test
             valid_acc, valid_loss, qid_corrects = \
                 validate(opt, dset, model, criterion, mode="valid", use_hard_negatives=use_hard_negatives)
@@ -111,8 +117,8 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
                 previous_best_acc = valid_acc
                 torch.save(model.state_dict(), os.path.join(opt.results_dir, "best_valid.pth"))
 
-            print("Epoch {:02d} [Train] acc {:.4f} loss {:.4f} loss_att {:.4f} loss_ts {:.4f} loss_cls {:.4f}"
-                  .format(epoch, train_acc, train_loss, train_loss_att, train_loss_ts, train_loss_cls))
+            print("Epoch {:02d} [Train] acc {:.4f} loss {:.4f} loss_att {:.4f} loss_ts {:.4f} loss_cls {:.4f} loss_hsic {:.4f}"
+                  .format(epoch, train_acc, train_loss, train_loss_att, train_loss_ts, train_loss_cls, train_loss_hsic))
 
             print("Epoch {:02d} [Val] acc {:.4f} loss {:.4f}"
                   .format(epoch, valid_acc, valid_loss))
@@ -126,6 +132,7 @@ def train(opt, dset, model, criterion, optimizer, epoch, previous_best_acc, use_
             train_loss_att = []
             train_loss_ts = []
             train_loss_cls = []
+            train_loss_hsic = []
 
         timer_dataloading = time.time()
         if opt.debug and batch_idx == 5:
@@ -160,6 +167,7 @@ def validate(opt, dset, model, criterion, mode="valid", use_hard_negatives=False
     valid_corrects = []
     max_len_dict = dict(
         max_sub_l=opt.max_sub_l,
+        max_desc_l=opt.max_desc_l,
         max_vid_l=opt.max_vid_l,
         max_vcpt_l=opt.max_vcpt_l,
         max_qa_l=opt.max_qa_l,
@@ -167,8 +175,8 @@ def validate(opt, dset, model, criterion, mode="valid", use_hard_negatives=False
     for val_idx, batch in enumerate(valid_loader):
         model_inputs, targets, qids = prepare_inputs(batch, max_len_dict=max_len_dict, device=opt.device)
         model_inputs.use_hard_negatives = use_hard_negatives
-        outputs, att_loss, _, temporal_loss, _ = model(model_inputs)
-        loss = criterion(outputs, targets) + opt.att_weight * att_loss + opt.ts_weight * temporal_loss
+        outputs, att_loss, _, temporal_loss, _, hsic_loss = model(model_inputs)
+        loss = criterion(outputs, targets) + opt.att_weight * att_loss + opt.ts_weight * temporal_loss + hsic_loss
         # measure accuracy and record loss
         valid_qids += [int(x) for x in qids]
         valid_loss.append(loss.data.item())

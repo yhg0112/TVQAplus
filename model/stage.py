@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import pprint
 from collections import defaultdict
+import tf_cka
 
 from context_query_attention import StructuredAttention
 from encoder import StackedEncoder
@@ -58,8 +59,11 @@ class STAGE(nn.Module):
         self.opt = opt
         self.inference_mode = False
         self.sub_flag = opt.sub_flag
+        self.desc_flag = opt.desc_flag
         self.vfeat_flag = opt.vfeat_flag
         self.vfeat_size = opt.vfeat_size
+        self.power_transform = opt.power_transform
+        self.hsic_scale = opt.hsic_scale
         self.t_iter = opt.t_iter
         self.extra_span_length = opt.extra_span_length
         self.add_local = opt.add_local
@@ -77,7 +81,7 @@ class STAGE(nn.Module):
         self.bsz = None
         self.num_seg = None
         self.num_a = 5
-        self.flag_cnt = self.sub_flag + self.vfeat_flag
+        self.flag_cnt = self.sub_flag + self.vfeat_flag + self.desc_flag
 
         self.wd_size = opt.embedding_size
         self.bridge_hsz = 300
@@ -92,6 +96,9 @@ class STAGE(nn.Module):
 
         if self.sub_flag:
             print("Activate sub branch")
+
+        if self.desc_flag:
+            print("Activate desc branch")
 
         if self.vfeat_flag:
             print("Activate vid branch")
@@ -108,6 +115,14 @@ class STAGE(nn.Module):
                 nn.LayerNorm(3 * self.hsz),
                 nn.Dropout(self.dropout),
                 nn.Linear(3 * self.hsz, self.hsz),
+                nn.ReLU(True),
+                nn.LayerNorm(self.hsz),
+            )
+        elif self.fag_cnt == 3:
+            self.concat_fc = nn.Sequential(
+                nn.LayerNorm(5 * self.hsz),
+                nn.Dropout(self.dropout),
+                nn.Linear(5 * self.hsz, self.hsz),
                 nn.ReLU(True),
                 nn.LayerNorm(self.hsz),
             )
@@ -193,8 +208,8 @@ class STAGE(nn.Module):
         if self.inference_mode:
             return self.forward_main(batch)
         else:
-            out, att_loss, att_predictions, temporal_loss, temporal_predictions, other_outputs = self.forward_main(batch)
-            return out, att_loss, att_predictions, temporal_loss, temporal_predictions
+            out, att_loss, att_predictions, temporal_loss, temporal_predictions, other_outputs, hisc_loss = self.forward_main(batch)
+            return out, att_loss, att_predictions, temporal_loss, temporal_predictions, hsic_loss
 
     def forward_main(self, batch):
         """
@@ -229,6 +244,9 @@ class STAGE(nn.Module):
                                     self.input_encoder)  # (N*5, L, D)
         a_embed = a_embed.view(bsz, num_a, 1, -1, hsz)  # (N, 5, 1, L, D)
         a_mask = batch.qas_mask.view(bsz, num_a, 1, -1)  # (N, 5, 1, L)
+        if self.power_transform:
+            beta = 0.5
+            a_embed = torch.pow(a_embed+1e-6, beta)
 
         attended_sub, attended_vid, attended_vid_mask, attended_sub_mask = (None, ) * 4
         other_outputs = {}  # {"pos_noun_mask": batch.qa_noun_masks}  # used to visualization and compute att acc
@@ -242,6 +260,9 @@ class STAGE(nn.Module):
 
             sub_embed = sub_embed.contiguous().view(bsz, 1, num_imgs, num_words, -1)  # (N, Li, Lw, D)
             sub_mask = batch.sub_mask.view(bsz, 1, num_imgs, num_words)  # (N, 1, Li, Lw)
+            if self.power_transform:
+                beta = 0.5
+                sub_embed = torch.pow(sub_embed+1e-6, beta)
 
             attended_sub, attended_sub_mask, sub_raw_s, sub_normalized_s = \
                 self.qa_ctx_attention(a_embed, sub_embed, a_mask, sub_mask,
@@ -250,6 +271,26 @@ class STAGE(nn.Module):
 
             other_outputs["sub_normalized_s"] = sub_normalized_s
             other_outputs["sub_raw_s"] = sub_raw_s
+
+        if self.desc_flag:
+            num_imgs_desc, num_words_desc = batch.desc_bert.shape[1:3]
+            desc_embed = self.base_encoder(batch.desc_bert.view(bsz*num_imgs_desc, num_words_desc, -1),  # (N*Li, Lw)
+                                          batch.desc_mask.view(bsz*num_imgs_desc, num_words_desc),  # (N*Li, Lw)
+                                          self.bert_word_encoding_fc,
+                                          self.input_embedding,
+                                          self.input_encoder)  # (N*Li, Lw, D)
+            desc_embed = desc_embed.contiguous().view(bsz, 1, num_imgs_desc, num_words_desc, -1)  # (N, Li, Lw, D)
+            desc_mask = batch.desc_mask.view(bsz, 1, num_imgs_desc, num_words_desc)  # (N, 1, Li, Lw)
+            if self.power_transform:
+                beta = 0.5
+                desc_embed = torch.pow(desc_embed+1e-6, beta)
+            attended_desc, attended_desc_mask, desc_raw_s, desc_normalized_s = \
+                self.qa_ctx_attention(a_embed, desc_embed, a_mask, desc_mask,
+                                      noun_mask=None,
+                                      non_visual_vectors=None)
+            
+            other_outputs["desc_normalized_s"] = desc_normalized_s
+            other_outputs["desc_raw_s"] = desc_raw_s
 
         if self.vfeat_flag:
             num_imgs, num_regions = batch.vid.shape[1:3]
@@ -263,6 +304,9 @@ class STAGE(nn.Module):
 
             vid_embed = vid_embed.contiguous().view(bsz, 1, num_imgs, num_regions, -1)  # (N, 1, Li, Lr, D)
             vid_mask = batch.vid_mask.view(bsz, 1, num_imgs, num_regions)  # (N, 1, Li, Lr)
+            if self.power_transform:
+                beta = 0.5
+                vid_embed = torch.pow(vid_embed+1e-6, beta)
 
             attended_vid, attended_vid_mask, vid_raw_s, vid_normalized_s = \
                 self.qa_ctx_attention(a_embed, vid_embed, a_mask, vid_mask,
@@ -272,11 +316,21 @@ class STAGE(nn.Module):
             other_outputs["vid_normalized_s"] = vid_normalized_s
             other_outputs["vid_raw_s"] = vid_raw_s
 
-        if self.flag_cnt == 2:
+        if self.flag_cnt == 3:
             visual_text_embedding = torch.cat([attended_sub,
                                                attended_vid,
-                                               attended_sub * attended_vid], dim=-1)  # (N, 5, Li, Lqa, 3D)
+                                               attended_desc,
+                                               attended_sub * attended_vid,
+                                               attended_desc * attended_vid], dim=-1)  # (N, 5, Li, Lqa, 3D)
             visual_text_embedding = self.concat_fc(visual_text_embedding)  # (N, 5, Li, Lqa, D)
+            out, target, t_scores = self.classfier_head_multi_proposal(
+                visual_text_embedding, attended_vid_mask, batch.target, batch.ts_label, batch.ts_label_mask,
+                extra_span_length=self.extra_span_length)
+        elif self.flag_cnt == 2:
+            visual_text_embedding = torch.cat([attended_sub,
+                                               attended_vid,
+                                               attended_sub * attended_vid], dim=-1)  # (N, 3, Li, Lqa, 3D)
+            visual_text_embedding = self.concat_fc(visual_text_embedding)  # (N, 3, Li, Lqa, D)
             out, target, t_scores = self.classfier_head_multi_proposal(
                 visual_text_embedding, attended_vid_mask, batch.target, batch.ts_label, batch.ts_label_mask,
                 extra_span_length=self.extra_span_length)
@@ -308,6 +362,10 @@ class STAGE(nn.Module):
                     boxes=batch.boxes,
                     start_indices=batch.anno_st_idx,
                 ) if self.vfeat_flag else None,
+                "vid_attention": {"attention": vid_normalized_s, "mask": vid_raw_s},
+                "sub_attention": {"attention": sub_normalized_s, "mask": sub_raw_s},
+                "desc_attention": {"attention": desc_normalized_s, "mask": desc_raw_s} if self.desc_flag else None,
+                "embeddings": {"qa_embed":a_embed, "sub_embed":sub_embed, "desc_embed":desc_embed if self.desc_flag else None, "vid_embed":vid_embed},
             }
             return inference_outputs
 
@@ -338,14 +396,27 @@ class STAGE(nn.Module):
             att_loss += cur_att_loss
             att_predictions = cur_att_predictions
 
+        hsic_loss = 0
+        if self.hsic_scale > 0:
+            # get cka and maximize it with scaling param
+            flattened_qa_embed = torch.flatten(a_embed, start_dim=0, end_dim=-2)
+            flattened_vid_embed = torch.flatten(vid_embed, start_dim=0, end_dim=-2)
+            max_size = 512
+            if flattened_qa_embed.size()[0] > max_size:
+                flattened_qa_embed = flattened_qa_embed[:512, :]
+            if flattened_vid_embed.size()[0] > max_size:
+                flattened_vid_embed = flattened_vid_embed[:512, :]
+            vid_qa_cka = tf_cka.cka_torch(flattened_vid_embed.t(), flattened_qa_embed.t())
+            hsic_loss = -1 * self.hsic_scale * vid_qa_cka
+
         temporal_loss = self.get_ts_loss(temporal_scores=t_scores,
                                          ts_labels=batch.ts_label,
                                          answer_indices=batch.target)
 
         if self.training:
-            return [out, target], att_loss, att_predictions, temporal_loss, t_scores, other_outputs
+            return [out, target], att_loss, att_predictions, temporal_loss, t_scores, other_outputs, hsic_loss
         else:
-            return out, att_loss, att_predictions, temporal_loss, F.softmax(t_scores, dim=2), other_outputs
+            return out, att_loss, att_predictions, temporal_loss, F.softmax(t_scores, dim=2), other_outputs, hsic_loss
 
     @classmethod
     def base_encoder(cls, data, data_mask, init_encoder, downsize_encoder, input_encoder):
