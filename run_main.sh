@@ -49,6 +49,5 @@ python main.py \
 --test_path ${test_path} \
 --desc_path ${desc_path} \
 --desc_bert_path ${desc_bert_path} \
---use_desc 1 \
 --hsic 0.001 \
 ${extra_args[@]}
